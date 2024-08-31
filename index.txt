@@ -1,0 +1,85 @@
+//import express from 'express';
+//import mongoose from 'mongoose';
+//import http from 'http';
+//import socketIo from 'socket.io';
+
+const express = require('express');
+const mongoose = require('mongoose');
+const http = require('http');
+const socketIo = require('socket.io');
+
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server);
+
+app.use(express.json());
+app.use(express.static('public'));
+
+// MongoDB connection
+//mongoose.connect('mongodb+srv://yaalu18:admin1@private-chat-room.bdfvtst.mongodb.net/', {
+mongoose.connect('mongodb+srv://yaalu18:admin1@private-chat-room1.4osy13u.mongodb.net/')
+.then(() => {
+  console.log('MongoDB connected');
+})
+.catch(err => console.error('MongoDB connection error:', err));
+
+// Define Mongoose schema and model
+const chatRoomSchema = new mongoose.Schema({
+  name: String,
+  users: [String],
+  messages: [{ user: String, text: String, timestamp: Date }]
+});
+
+const ChatRoom = mongoose.model('ChatRoom', chatRoomSchema);
+
+// Socket.io events
+io.on('connection', (socket) => {
+  console.log('A user connected');
+
+  socket.on('joinRoom', async ({ room, user }) => {
+    socket.join(room);
+    await ChatRoom.updateOne({ name: room }, { $addToSet: { users: user } });
+
+    socket.to(room).emit('message', { user: 'System', text: `${user} has joined the room!` });
+
+    socket.on('message', async (message) => {
+      const chatRoom = await ChatRoom.findOne({ name: room });
+      chatRoom.messages.push({ user: message.user, text: message.text, timestamp: new Date() });
+      await chatRoom.save();
+      io.to(room).emit('message', message);
+    });
+
+    socket.on('disconnect', async () => {
+      console.log('A user disconnected');
+      await ChatRoom.updateOne({ name: room }, { $pull: { users: user } });
+      socket.to(room).emit('message', { user: 'System', text: `${user} has left the room.` });
+
+      const chatRoom = await ChatRoom.findOne({ name: room });
+      if (chatRoom.users.length === 0) {
+        await ChatRoom.deleteOne({ name: room });
+      }
+    });
+  });
+});
+
+// Routes
+app.get('/', (req, res) => {
+  res.send('Hello World');
+});
+
+app.post('/createRoom', async (req, res) => {
+  const { name } = req.body;
+  const existingRoom = await ChatRoom.findOne({ name });
+  if (existingRoom) {
+    return res.status(400).json({ error: 'Room already exists' });
+  }
+  const chatRoom = new ChatRoom({ name, users: [] });
+  await chatRoom.save();
+  res.status(201).json(chatRoom);
+});
+
+// Server setup
+const PORT = process.env.PORT || 4000;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
